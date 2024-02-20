@@ -1,10 +1,13 @@
 import json, requests, csv, os
 from datetime import datetime
+from azure.storage.blob import BlobServiceClient
 
 # These are my global variables
 ak= os.environ.get("ACCESS_KEY")
 secret = os.environ.get("SECRET")
 region = os.environ.get("REGION")
+connection_string = os.environ.get("CONNECTION_STRING")
+container_name = "compliance-standard-reports"
 
 def token():
     
@@ -147,26 +150,26 @@ def report_maker(cloud_analysis,cloud):
 
                     for asset in allAssests:
                         
-                        #severity_guide=['','informational','low','medium','high','critical']
-                        #severities=asset['scannedPolicies']
+                        severity_guide=['','informational','low','medium','high','critical']
+                        severities=asset['scannedPolicies']
                         severity=asset['scannedPolicies'][0]['severity']
                         passed=asset['scannedPolicies'][0]['passed']
 
-                        # if len(severities) > 1:
+                        if len(severities) > 1:
                             
-                        #     index=0
+                            index=0
 
-                        #     for x in severities:
-                        #         for y in severity_guide:
-                        #             if x['severity']==y:
-                        #                 if severity_guide.index(y) > index:
-                        #                     severity=x['severity']
-                        #                     index=severity_guide.index(y)
+                            for x in severities:
+                                for y in severity_guide:
+                                    if x['severity']==y:
+                                        if severity_guide.index(y) > index:
+                                            severity=x['severity']
+                                            index=severity_guide.index(y)
 
-                        #     for x in severities:
-                        #         if x['passed']==False:
-                        #             passed=False
-                        #             break
+                            for x in severities:
+                                if x['passed']==False:
+                                    passed=False
+                                    break
 
                         row={}
                         row={
@@ -195,19 +198,39 @@ def report_maker(cloud_analysis,cloud):
     dt_string = nowvalue.strftime("%Y-%m-%d_%H_%M_%S")
 
     write_csv(main_data,cloud+" Analysis "+dt_string)
+    write_csv(main_data,"currentanalysis-"+cloud)
+
+    blob_name="currentanalysis-"+cloud
+    blob_name2=cloud+" Analysis "+dt_string
+
+    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+    blob_client = blob_service_client.get_blob_client(container_name, blob_name)
+    blob_client2 = blob_service_client.get_blob_client("historial-compliance-standard-reports",blob_name2)
+
+    try:
+        with open(blob_name+".csv", "rb") as data:
+            blob_client.upload_blob(data, overwrite=True)
+            print(f"Blob uploaded successfully: {blob_name}")
+
+        with open(blob_name2+".csv", "rb") as data:
+            blob_client2.upload_blob(data, overwrite=True)
+            print(f"Blob uploaded successfully: {blob_name2}")
+
+    except Exception as e:
+        print(f"Error uploading blob: {e}")
 
 def handler():
 
     azure_analysis=[['Estandar Sura Azure PDN V 0.6','Azure PDN Account Group','Produccion'],
                     ['Estandar Sura Azure DLLO V 0.6','Azure DLLO Account Group','Desarrollo'],
                     ['Estandar Sura Azure LAB V 0.6','Azure LAB Account Group','Laboratorio']]
-    # aws_analysis=[['',''],['',''],['','']]
+    aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
+                    ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
+                    ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
     # oci_analysis=[['',''],['',''],['','']]
 
-    #azure_analysis=[['CIS v1.4.0 (Azure)','Default Account Group','pdn']]
-
     report_maker(azure_analysis,'azure')
-    #report_maker(aws_analysis,'aws')
+    report_maker(aws_analysis,'aws')
     #report_maker(oci_analysis,'oci')
 
 handler()
