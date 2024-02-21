@@ -1,37 +1,45 @@
-import json, requests, csv, os
+import azure.functions as func
 from datetime import datetime
+import json, gc
+import logging
+
+app = func.FunctionApp()
+
+@app.timer_trigger(schedule="0 0 */6 * * *", arg_name="myTimer", run_on_startup=True,
+              use_monitor=True) 
+def timer_trigger(myTimer: func.TimerRequest) -> None:
+    
+    if myTimer.past_due:
+        logging.info('The timer is past due!')
+
+    logging.info('Python timer trigger function executed.')
+
+import os, requests, csv, json, gc, logging
 from azure.storage.blob import BlobServiceClient
+from datetime import datetime
 
 # These are my global variables
 ak= os.environ.get("ACCESS_KEY")
 secret = os.environ.get("SECRET")
-region = os.environ.get("REGION")
+region = "api4"
 connection_string = os.environ.get("CONNECTION_STRING")
 container_name = "compliance-standard-reports"
 
 def token():
-    
     url="https://{}.prismacloud.io/login".format(region)
-
     payload={
         "username":ak,
         "password":secret
     }
     payload=json.dumps(payload)
-    
     headers={
         'Content-Type': 'application/json; charset=UTF-8',
         'Accept': 'application/json; charset=UTF-8'
     }
-
     response=requests.request("POST",url,headers=headers,data=payload)
-    if response.status_code == 200:
-        response=json.loads(response.content)
-        # Token of Prisma Cloud session
-        return response['token']
-    
-    else:
-        print("Wrong credentials")
+    response=json.loads(response.content)
+    # Token of Prisma Cloud session
+    return response['token']
 
 def all_compliance_standards():
 
@@ -89,6 +97,7 @@ def assets_inventory(account_group,compliance_name,requirement_name,section_id):
         "policy.complianceStandard":compliance_name,
         "policy.complianceRequirement":requirement_name,
         "policy.complianceSection": section_id
+        #"limit": 50
     }
 
     headers={
@@ -103,16 +112,41 @@ def assets_inventory(account_group,compliance_name,requirement_name,section_id):
     #[{accountId:"",accountName:"",...},...]
     return response
 
-def write_csv(data,filename):
-    with open("{}.csv".format(filename), "w", newline="") as csvfile:
-        fieldnames = data[0].keys()  # Extract keys from the first dictionary
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(data)
+def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_name):
 
-def report_maker(cloud_analysis,cloud):
+    # Extract unique dictionary keys to determine CSV headers
+    headers = set()
+    for item in data:
+        headers.update(item.keys())
 
-    allComplianceStandards=all_compliance_standards()
+    # Create a virtual file-like object using a TextIOBase subclass
+    class VirtualTextIO:
+        def __init__(self):
+            self.buffer = []
+
+        def write(self, s):
+            self.buffer.append(s)
+
+        def getvalue(self):
+            return "\n".join(self.buffer)
+
+    # Write CSV data to the virtual file-like object
+    csv_file = VirtualTextIO()
+    csv_writer = csv.DictWriter(csv_file, fieldnames=headers)
+    csv_writer.writeheader()
+    csv_writer.writerows(data)
+
+    # Upload the CSV data to the blob
+    try:
+        blob_client = blob_service_client.get_blob_client(container_name, blob_name)
+        blob_client.upload_blob(csv_file.getvalue(), content_type="text/csv", overwrite=True)
+        print(f"Data successfully uploaded to blob '{blob_name}' in container '{container_name}'.")
+        logging.info(f"Data successfully uploaded to blob '{blob_name}' in container '{container_name}'.")
+    except Exception as e:
+        print(f"Error uploading data: {e}")
+        logging.info(f"Error uploading data: {e}")
+
+def report_maker(cloud_analysis,cloud,allComplianceStandards):
 
     main_data=[]
 
@@ -130,6 +164,7 @@ def report_maker(cloud_analysis,cloud):
         else:
 
             print('{} compliance standard was not found in Prisma Cloud for this analysis\nExiting this script...'.format(compliance_name))
+            logging.info('{} compliance standard was not found in Prisma Cloud for this analysis\nExiting this script...'.format(compliance_name))
             exit()
         
         #[{"description":"Ensure that...","id":"","name":"iam","requirementId":"1",...},...]
@@ -150,26 +185,26 @@ def report_maker(cloud_analysis,cloud):
 
                     for asset in allAssests:
                         
-                        severity_guide=['','informational','low','medium','high','critical']
-                        severities=asset['scannedPolicies']
+                        # severity_guide=['','informational','low','medium','high','critical']
+                        # severities=asset['scannedPolicies']
                         severity=asset['scannedPolicies'][0]['severity']
                         passed=asset['scannedPolicies'][0]['passed']
 
-                        if len(severities) > 1:
+                        # if len(severities) > 1:
                             
-                            index=0
+                        #     index=0
 
-                            for x in severities:
-                                for y in severity_guide:
-                                    if x['severity']==y:
-                                        if severity_guide.index(y) > index:
-                                            severity=x['severity']
-                                            index=severity_guide.index(y)
+                        #     for x in severities:
+                        #         for y in severity_guide:
+                        #             if x['severity']==y:
+                        #                 if severity_guide.index(y) > index:
+                        #                     severity=x['severity']
+                        #                     index=severity_guide.index(y)
 
-                            for x in severities:
-                                if x['passed']==False:
-                                    passed=False
-                                    break
+                        #     for x in severities:
+                        #         if x['passed']==False:
+                        #             passed=False
+                        #             break
 
                         row={}
                         row={
@@ -187,50 +222,47 @@ def report_maker(cloud_analysis,cloud):
                         }
 
                         main_data.append(row.copy())
+
+                        del row
+
+                        gc.collect()
                 
                 except:
 
                     print('THERE IT WAS AN ERROR TRYING TO GET ASSETS INFO FOR SECTION ONE SECTION')
                 
                 print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
+                logging.info('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
 
     nowvalue = datetime.now()
     dt_string = nowvalue.strftime("%Y-%m-%d_%H_%M_%S")
 
-    write_csv(main_data,cloud+" Analysis "+dt_string)
-    write_csv(main_data,"currentanalysis-"+cloud)
-
-    blob_name="currentanalysis-"+cloud
-    blob_name2=cloud+" Analysis "+dt_string
+    blob_name="currentanalysis-"+cloud+".csv"
+    blob_name2=cloud+" Analysis "+dt_string+".csv"
 
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-    blob_client = blob_service_client.get_blob_client(container_name, blob_name)
-    blob_client2 = blob_service_client.get_blob_client("historial-compliance-standard-reports",blob_name2)
 
-    try:
-        with open(blob_name+".csv", "rb") as data:
-            blob_client.upload_blob(data, overwrite=True)
-            print(f"Blob uploaded successfully: {blob_name}")
+    send_dicts_to_blob_storage(main_data,blob_service_client,container_name,blob_name)
+    send_dicts_to_blob_storage(main_data,blob_service_client,'historial-compliance-standard-reports',blob_name2)
 
-        with open(blob_name2+".csv", "rb") as data:
-            blob_client2.upload_blob(data, overwrite=True)
-            print(f"Blob uploaded successfully: {blob_name2}")
+    del main_data
 
-    except Exception as e:
-        print(f"Error uploading blob: {e}")
+    gc.collect()
 
 def handler():
+
+    allComplianceStandards=all_compliance_standards()
 
     azure_analysis=[['Estandar Sura Azure PDN V 0.6','Azure PDN Account Group','Produccion'],
                     ['Estandar Sura Azure DLLO V 0.6','Azure DLLO Account Group','Desarrollo'],
                     ['Estandar Sura Azure LAB V 0.6','Azure LAB Account Group','Laboratorio']]
     aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
-                    ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
-                    ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
-    # oci_analysis=[['',''],['',''],['','']]
+                     ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
+                     ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
+    #oci_analysis=[['',''],['',''],['','']]
 
-    report_maker(azure_analysis,'azure')
-    report_maker(aws_analysis,'aws')
+    report_maker(azure_analysis,'azure',allComplianceStandards)
+    report_maker(aws_analysis,'aws',allComplianceStandards)
     #report_maker(oci_analysis,'oci')
 
 handler()
