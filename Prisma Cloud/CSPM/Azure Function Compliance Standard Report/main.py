@@ -116,8 +116,7 @@ def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_n
 
     #Making the Header!
     headers = set()
-    for item in data:
-        headers.update(item.keys())
+    headers.update(data[0].keys())
 
     # Create a virtual file-like object using a TextIOBase subclass
     class VirtualTextIO:
@@ -259,10 +258,12 @@ def handler():
     aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
                      ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
                      ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
-    #oci_analysis=[['',''],['',''],['','']]
+    oci_analysis=[['Estandar Sura OCI PDN V 0.5','OCI PDN Account Group','Produccion']]
+                  #['',''],
+                  #['','']]
 
     report_maker(azure_analysis,'azure',allComplianceStandards)
     report_maker(aws_analysis,'aws',allComplianceStandards)
-    #report_maker(oci_analysis,'oci')
+    report_maker(oci_analysis,'oci',allComplianceStandards)
 
 handler()
