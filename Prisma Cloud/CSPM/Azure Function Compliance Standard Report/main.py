@@ -5,7 +5,7 @@ import logging
 
 app = func.FunctionApp()
 
-@app.timer_trigger(schedule="0 0 */6 * * *", arg_name="myTimer", run_on_startup=True,
+@app.timer_trigger(schedule="0 0 0 * * *", arg_name="myTimer", run_on_startup=True,
               use_monitor=True) 
 def timer_trigger(myTimer: func.TimerRequest) -> None:
     
@@ -114,7 +114,7 @@ def assets_inventory(account_group,compliance_name,requirement_name,section_id):
 
 def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_name):
 
-    # Extract unique dictionary keys to determine CSV headers
+    #Making the Header!
     headers = set()
     for item in data:
         headers.update(item.keys())
@@ -128,15 +128,15 @@ def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_n
             self.buffer.append(s)
 
         def getvalue(self):
-            return "\n".join(self.buffer)
+            return "".join(self.buffer)
 
-    # Write CSV data to the virtual file-like object
+    #Write CSV data to the virtual file-like object
     csv_file = VirtualTextIO()
     csv_writer = csv.DictWriter(csv_file, fieldnames=headers)
     csv_writer.writeheader()
     csv_writer.writerows(data)
 
-    # Upload the CSV data to the blob
+    #Upload the CSV data to the blob
     try:
         blob_client = blob_service_client.get_blob_client(container_name, blob_name)
         blob_client.upload_blob(csv_file.getvalue(), content_type="text/csv", overwrite=True)
