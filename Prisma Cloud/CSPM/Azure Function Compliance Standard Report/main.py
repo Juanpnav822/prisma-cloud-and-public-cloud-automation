@@ -1,22 +1,7 @@
-import azure.functions as func
-from datetime import datetime
-import json, gc
-import logging
-
-app = func.FunctionApp()
-
-@app.timer_trigger(schedule="0 0 0 * * *", arg_name="myTimer", run_on_startup=True,
-              use_monitor=True) 
-def timer_trigger(myTimer: func.TimerRequest) -> None:
-    
-    if myTimer.past_due:
-        logging.info('The timer is past due!')
-
-    logging.info('Python timer trigger function executed.')
-
 import os, requests, csv, json, gc, logging
 from azure.storage.blob import BlobServiceClient
 from datetime import datetime
+import threading
 
 # These are my global variables
 ak= os.environ.get("ACCESS_KEY")
@@ -145,6 +130,54 @@ def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_n
         print(f"Error uploading data: {e}")
         logging.info(f"Error uploading data: {e}")
 
+def data_maker(main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente):
+
+    allAssests=assets_inventory(account_group,compliance_name,requirement_name,section['sectionId'])
+
+    for asset in allAssests:
+        
+        # severity_guide=['','informational','low','medium','high','critical']
+        # severities=asset['scannedPolicies']
+        severity=asset['scannedPolicies'][0]['severity']
+        passed=asset['scannedPolicies'][0]['passed']
+
+        # if len(severities) > 1:
+            
+        #     index=0
+
+        #     for x in severities:
+        #         for y in severity_guide:
+        #             if x['severity']==y:
+        #                 if severity_guide.index(y) > index:
+        #                     severity=x['severity']
+        #                     index=severity_guide.index(y)
+
+        #     for x in severities:
+        #         if x['passed']==False:
+        #             passed=False
+        #             break
+
+        row={}
+        row={
+            'Cloud':cloud,
+            'Compliance Standard':compliance_name,
+            'Section ID': section['sectionId'],
+            'Section Description': section['description'],
+            'Requirement': requirement_name,
+            'Resource': asset['name'],
+            'Account ID': asset['accountId'],
+            'Account Name': asset['accountName'],
+            'Enviroment': ambiente,
+            'Severity': severity,
+            'Passed': passed
+        }
+
+        main_data.append(row.copy())
+
+        del row
+
+        gc.collect()
+
 def report_maker(cloud_analysis,cloud,allComplianceStandards):
 
     main_data=[]
@@ -178,60 +211,13 @@ def report_maker(cloud_analysis,cloud,allComplianceStandards):
 
             for section in allSections:
 
-                try:
-
-                    allAssests=assets_inventory(account_group,compliance_name,requirement_name,section['sectionId'])
-
-                    for asset in allAssests:
-                        
-                        # severity_guide=['','informational','low','medium','high','critical']
-                        # severities=asset['scannedPolicies']
-                        severity=asset['scannedPolicies'][0]['severity']
-                        passed=asset['scannedPolicies'][0]['passed']
-
-                        # if len(severities) > 1:
-                            
-                        #     index=0
-
-                        #     for x in severities:
-                        #         for y in severity_guide:
-                        #             if x['severity']==y:
-                        #                 if severity_guide.index(y) > index:
-                        #                     severity=x['severity']
-                        #                     index=severity_guide.index(y)
-
-                        #     for x in severities:
-                        #         if x['passed']==False:
-                        #             passed=False
-                        #             break
-
-                        row={}
-                        row={
-                            'Cloud':cloud,
-                            'Compliance Standard':compliance_name,
-                            'Section ID': section['sectionId'],
-                            'Section Description': section['description'],
-                            'Requirement': requirement_name,
-                            'Resource': asset['name'],
-                            'Account ID': asset['accountId'],
-                            'Account Name': asset['accountName'],
-                            'Enviroment': ambiente,
-                            'Severity': severity,
-                            'Passed': passed
-                        }
-
-                        main_data.append(row.copy())
-
-                        del row
-
-                        gc.collect()
-                
-                except:
-
-                    print('THERE IT WAS AN ERROR TRYING TO GET ASSETS INFO FOR SECTION ONE SECTION')
+                t = threading.Thread(target=data_maker, args=[main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente])
+                t.start()
                 
                 print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
                 logging.info('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
+
+            t.join()
 
     nowvalue = datetime.now()
     dt_string = nowvalue.strftime("%Y-%m-%d_%H_%M_%S")
@@ -255,15 +241,15 @@ def handler():
     azure_analysis=[['Estandar Sura Azure PDN V 0.6','Azure PDN Account Group','Produccion'],
                     ['Estandar Sura Azure DLLO V 0.6','Azure DLLO Account Group','Desarrollo'],
                     ['Estandar Sura Azure LAB V 0.6','Azure LAB Account Group','Laboratorio']]
-    aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
-                     ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
-                     ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
-    oci_analysis=[['Estandar Sura OCI PDN V 0.5','OCI PDN Account Group','Produccion']]
+    # aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
+    #                 ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
+    #                 ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
+    #oci_analysis=[['Estandar Sura OCI PDN V 0.5','OCI PDN Account Group','Produccion']]
                   #['',''],
                   #['','']]
 
     report_maker(azure_analysis,'azure',allComplianceStandards)
-    report_maker(aws_analysis,'aws',allComplianceStandards)
-    report_maker(oci_analysis,'oci',allComplianceStandards)
+    #report_maker(aws_analysis,'aws',allComplianceStandards)
+    #report_maker(oci_analysis,'oci',allComplianceStandards)
 
 handler()
