@@ -225,7 +225,7 @@ def data_maker(main_data,account_group,compliance_name,requirement_name,section,
             'Analista Responsable': responsable,
             'Lider del Proyecto': lider
         }
-        print(responsable+' '+lider)
+
         main_data.append(row.copy())
 
         del row
@@ -271,7 +271,7 @@ def report_maker(cloud_analysis,cloud,allComplianceStandards):
                 t = threading.Thread(target=data_maker, args=[main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente])
                 t.start()
                 
-                #print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
+                print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
                 logging.info('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
 
             t.join()
@@ -295,8 +295,7 @@ def handler():
 
     allComplianceStandards=all_compliance_standards()
 
-    azure_analysis=[['CIS v1.4.0 (Azure)','Default Account Group','Produccion'],
-                    ['Estandar Sura Azure PDN V 0.6','Azure PDN Account Group','Produccion'],
+    azure_analysis=[['Estandar Sura Azure PDN V 0.6','Azure PDN Account Group','Produccion'],
                     ['Estandar Sura Azure DLLO V 0.6','Azure DLLO Account Group','Desarrollo'],
                     ['Estandar Sura Azure LAB V 0.6','Azure LAB Account Group','Laboratorio']]
     aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
