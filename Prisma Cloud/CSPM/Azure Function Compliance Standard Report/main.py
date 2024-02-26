@@ -1,7 +1,18 @@
-import os, requests, csv, json, gc, logging
-from azure.storage.blob import BlobServiceClient
+import logging, json, gc, os, requests, threading, csv, sys
+import azure.functions as func
 from datetime import datetime
-import threading
+from azure.storage.blob import BlobServiceClient
+
+app = func.FunctionApp()
+
+@app.schedule(schedule="0 0 0 * * *", arg_name="myTimer", run_on_startup=True,
+              use_monitor=False) 
+def prismareports(myTimer: func.TimerRequest) -> None:
+    if myTimer.past_due:
+        logging.info('The timer is past due!')
+
+    logging.info('Python timer trigger function executed.')
+    logging.info('Hello World!')
 
 # These are my global variables
 ak= os.environ.get("ACCESS_KEY")
@@ -9,6 +20,7 @@ secret = os.environ.get("SECRET")
 region = "api4"
 connection_string = os.environ.get("CONNECTION_STRING")
 container_name = "compliance-standard-reports"
+semaphore=threading.BoundedSemaphore(value=4)
 
 def token():
     url="https://{}.prismacloud.io/login".format(region)
@@ -97,6 +109,38 @@ def assets_inventory(account_group,compliance_name,requirement_name,section_id):
     #[{accountId:"",accountName:"",...},...]
     return response
 
+def asset_json_view(asset_id):
+
+    url="https://{}.prismacloud.io/uai/v1/asset".format(region)
+
+    payload={
+        "assetId": asset_id,
+        "type": "asset"
+    }
+    payload=json.dumps(payload)
+
+    headers={
+        'Content-Type': 'application/json; charset=UTF-8',
+        'Accept': 'application/json; charset=UTF-8',
+        'x-redlock-auth': token()
+    }
+
+    response=requests.request("POST",url,headers=headers,data=payload)
+    response=json.loads(response.text)
+    return response
+
+def find_tags_in_jason_view(tags,keyword):
+
+    if tags!={}:
+
+        for key,value in tags.items():
+            
+            if keyword.lower() in key.lower():
+
+                return value
+
+    return "unknow"
+
 def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_name):
 
     #Making the Header!
@@ -132,30 +176,38 @@ def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_n
 
 def data_maker(main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente):
 
+    semaphore.acquire()
+
     allAssests=assets_inventory(account_group,compliance_name,requirement_name,section['sectionId'])
 
     for asset in allAssests:
         
-        # severity_guide=['','informational','low','medium','high','critical']
-        # severities=asset['scannedPolicies']
+        asset_id=asset['unifiedAssetId']
+        severity_guide=['','informational','low','medium','high','critical']
+        severities=asset['scannedPolicies']
         severity=asset['scannedPolicies'][0]['severity']
         passed=asset['scannedPolicies'][0]['passed']
 
-        # if len(severities) > 1:
+        if len(severities) > 1:
             
-        #     index=0
+            index=0
 
-        #     for x in severities:
-        #         for y in severity_guide:
-        #             if x['severity']==y:
-        #                 if severity_guide.index(y) > index:
-        #                     severity=x['severity']
-        #                     index=severity_guide.index(y)
+            for x in severities:
+                for y in severity_guide:
+                    if x['severity']==y:
+                        if severity_guide.index(y) > index:
+                            severity=x['severity']
+                            index=severity_guide.index(y)
 
-        #     for x in severities:
-        #         if x['passed']==False:
-        #             passed=False
-        #             break
+            for x in severities:
+                if x['passed']==False:
+                    passed=False
+                    break
+        
+        json_asset=asset_json_view(asset_id)
+
+        responsable=find_tags_in_jason_view(json_asset['data']['asset']['tags'],'responsable')
+        lider=find_tags_in_jason_view(json_asset['data']['asset']['tags'],'lider')
 
         row={}
         row={
@@ -169,14 +221,19 @@ def data_maker(main_data,account_group,compliance_name,requirement_name,section,
             'Account Name': asset['accountName'],
             'Enviroment': ambiente,
             'Severity': severity,
-            'Passed': passed
+            'Passed': passed,
+            'Analista Responsable': responsable,
+            'Lider del Proyecto': lider
         }
-
+        print(responsable+' '+lider)
         main_data.append(row.copy())
 
         del row
+        del json_asset
 
         gc.collect()
+    
+    semaphore.release()
 
 def report_maker(cloud_analysis,cloud,allComplianceStandards):
 
@@ -187,7 +244,7 @@ def report_maker(cloud_analysis,cloud,allComplianceStandards):
         compliance_id=""
 
         for x in allComplianceStandards:
-               
+            
             if compliance_name == x['name']:
 
                 compliance_id=x['id']
@@ -197,7 +254,7 @@ def report_maker(cloud_analysis,cloud,allComplianceStandards):
 
             print('{} compliance standard was not found in Prisma Cloud for this analysis\nExiting this script...'.format(compliance_name))
             logging.info('{} compliance standard was not found in Prisma Cloud for this analysis\nExiting this script...'.format(compliance_name))
-            exit()
+            sys.exit()
         
         #[{"description":"Ensure that...","id":"","name":"iam","requirementId":"1",...},...]
         allRequirements=all_compliance_requirements(compliance_id)
@@ -214,7 +271,7 @@ def report_maker(cloud_analysis,cloud,allComplianceStandards):
                 t = threading.Thread(target=data_maker, args=[main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente])
                 t.start()
                 
-                print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
+                #print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
                 logging.info('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
 
             t.join()
@@ -238,18 +295,19 @@ def handler():
 
     allComplianceStandards=all_compliance_standards()
 
-    azure_analysis=[['Estandar Sura Azure PDN V 0.6','Azure PDN Account Group','Produccion'],
+    azure_analysis=[['CIS v1.4.0 (Azure)','Default Account Group','Produccion'],
+                    ['Estandar Sura Azure PDN V 0.6','Azure PDN Account Group','Produccion'],
                     ['Estandar Sura Azure DLLO V 0.6','Azure DLLO Account Group','Desarrollo'],
                     ['Estandar Sura Azure LAB V 0.6','Azure LAB Account Group','Laboratorio']]
-    # aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
-    #                 ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
-    #                 ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
-    #oci_analysis=[['Estandar Sura OCI PDN V 0.5','OCI PDN Account Group','Produccion']]
-                  #['',''],
-                  #['','']]
+    aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
+                    ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
+                    ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
+    oci_analysis=[['Estandar Sura OCI PDN V 0.5','OCI PDN Account Group','Produccion'],
+                    ['Estandar Sura OCI DLLO V 0.5','OCI DLLO Account Group','Desarrollo'],
+                    ['Estandar Sura OCI LAB V 0.5','OCI LAB Account Group','Laboratorio']]
 
     report_maker(azure_analysis,'azure',allComplianceStandards)
-    #report_maker(aws_analysis,'aws',allComplianceStandards)
-    #report_maker(oci_analysis,'oci',allComplianceStandards)
+    report_maker(aws_analysis,'aws',allComplianceStandards)
+    report_maker(oci_analysis,'oci',allComplianceStandards)
 
 handler()
