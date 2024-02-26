@@ -18,9 +18,9 @@ def prismareports(myTimer: func.TimerRequest) -> None:
 ak= os.environ.get("ACCESS_KEY")
 secret = os.environ.get("SECRET")
 region = "api4"
-connection_string = os.environ.get("CONNECTION_STRING")
+#connection_string = os.environ.get("CONNECTION_STRING")
 container_name = "compliance-standard-reports"
-semaphore=threading.BoundedSemaphore(value=4)
+#semaphore=threading.BoundedSemaphore(value=60)
 
 def token():
     url="https://{}.prismacloud.io/login".format(region)
@@ -103,7 +103,7 @@ def assets_inventory(account_group,compliance_name,requirement_name,section_id):
     }
 
     response=requests.request("GET",url,headers=headers,params=payload)
-    response=json.loads(response.content)
+    response=json.loads(response.text)
     response=response['resources']
 
     #[{accountId:"",accountName:"",...},...]
@@ -131,7 +131,7 @@ def asset_json_view(asset_id):
 
 def find_tags_in_jason_view(tags,keyword):
 
-    if tags!={}:
+    if tags!={} and tags is not None:
 
         for key,value in tags.items():
             
@@ -139,7 +139,7 @@ def find_tags_in_jason_view(tags,keyword):
 
                 return value
 
-    return "unknow"
+    return "SinAsignar"
 
 def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_name):
 
@@ -174,66 +174,92 @@ def send_dicts_to_blob_storage(data, blob_service_client, container_name, blob_n
         print(f"Error uploading data: {e}")
         logging.info(f"Error uploading data: {e}")
 
+def row_maker(main_data,asset,cloud,compliance_name,section,requirement_name,ambiente):
+         
+    asset_id=asset['unifiedAssetId']
+    # severity_guide=['','informational','low','medium','high','critical']
+    # severities=asset['scannedPolicies']
+    severity=asset['scannedPolicies'][0]['severity']
+    passed=asset['scannedPolicies'][0]['passed']
+
+    # if len(severities) > 1:
+        
+    #     index=0
+
+    #     for x in severities:
+    #         for y in severity_guide:
+    #             if x['severity']==y:
+    #                 if severity_guide.index(y) > index:
+    #                     severity=x['severity']
+    #                     index=severity_guide.index(y)
+
+    #     for x in severities:
+    #         if x['passed']==False:
+    #             passed=False
+    #             break
+    
+    responsable='SinAsignar'
+    lider='SinAsignar'
+    json_asset={}
+    json_asset=asset_json_view(asset_id)
+    
+    if json_asset is not None:
+        if json_asset['data'] is not None:
+            if json_asset['data']['asset'] is not None:
+                if json_asset['data']['asset']['tags'] is not None:
+                    responsable=find_tags_in_jason_view(json_asset['data']['asset']['tags'],'responsable')
+                    lider=find_tags_in_jason_view(json_asset['data']['asset']['tags'],'lider')
+
+    row={
+        'Cloud':cloud,
+        'Compliance Standard':compliance_name,
+        'Section ID': section['sectionId'],
+        'Section Description': section['description'],
+        'Requirement': requirement_name,
+        'Resource': asset['name'],
+        'Account ID': asset['accountId'],
+        'Account Name': asset['accountName'],
+        'Enviroment': ambiente,
+        'Severity': severity,
+        'Passed': passed,
+        'Analista Responsable': responsable,
+        'Lider del Proyecto': lider
+    }
+
+    main_data.append(row.copy())
+
+    del row
+    del json_asset
+
+    gc.collect()
+
+    #print(responsable+" "+lider)
+    #print("Row done!")
+    
+    #semaphore.release()
+    return 'Hello World!'
+
 def data_maker(main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente):
 
-    semaphore.acquire()
+    #semaphore.acquire()
 
     allAssests=assets_inventory(account_group,compliance_name,requirement_name,section['sectionId'])
 
     for asset in allAssests:
         
-        asset_id=asset['unifiedAssetId']
-        severity_guide=['','informational','low','medium','high','critical']
-        severities=asset['scannedPolicies']
-        severity=asset['scannedPolicies'][0]['severity']
-        passed=asset['scannedPolicies'][0]['passed']
-
-        if len(severities) > 1:
-            
-            index=0
-
-            for x in severities:
-                for y in severity_guide:
-                    if x['severity']==y:
-                        if severity_guide.index(y) > index:
-                            severity=x['severity']
-                            index=severity_guide.index(y)
-
-            for x in severities:
-                if x['passed']==False:
-                    passed=False
-                    break
-        
-        json_asset=asset_json_view(asset_id)
-
-        responsable=find_tags_in_jason_view(json_asset['data']['asset']['tags'],'responsable')
-        lider=find_tags_in_jason_view(json_asset['data']['asset']['tags'],'lider')
-
-        row={}
-        row={
-            'Cloud':cloud,
-            'Compliance Standard':compliance_name,
-            'Section ID': section['sectionId'],
-            'Section Description': section['description'],
-            'Requirement': requirement_name,
-            'Resource': asset['name'],
-            'Account ID': asset['accountId'],
-            'Account Name': asset['accountName'],
-            'Enviroment': ambiente,
-            'Severity': severity,
-            'Passed': passed,
-            'Analista Responsable': responsable,
-            'Lider del Proyecto': lider
-        }
-
-        main_data.append(row.copy())
-
-        del row
-        del json_asset
-
-        gc.collect()
+        t=threading.Thread(target=row_maker, args=[main_data,asset,cloud,compliance_name,section,requirement_name,ambiente])
+        t.start()
     
-    semaphore.release()
+    try:
+
+        t.join()
+
+    except:
+
+        print(section['sectionId'])
+
+    print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
+    # logging.info('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
 
 def report_maker(cloud_analysis,cloud,allComplianceStandards):
 
@@ -268,28 +294,40 @@ def report_maker(cloud_analysis,cloud,allComplianceStandards):
 
             for section in allSections:
 
-                t = threading.Thread(target=data_maker, args=[main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente])
-                t.start()
-                
-                print('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
-                logging.info('Assets for "{} {} {} {} {}" was added to the report'.format(account_group,compliance_name,requirement_name,section['sectionId'],section['description']))
+                #ts = threading.Thread(target=data_maker, args=[main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente])
+                #ts.start()
 
-            t.join()
+                data_maker(main_data,account_group,compliance_name,requirement_name,section,cloud,ambiente)
 
-    nowvalue = datetime.now()
-    dt_string = nowvalue.strftime("%Y-%m-%d_%H_%M_%S")
+            # while ts:
+            #     for thread in ts.copy():
+            #         if not thread.is_alive():
+            #             ts.remove(thread)    
+            #ts.join()
 
-    blob_name="currentanalysis-"+cloud+".csv"
-    blob_name2=cloud+" Analysis "+dt_string+".csv"
+            print("Data for requirement '{} {}' was added".format(requirement_name,requirement_id))
 
-    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+    # nowvalue = datetime.now()
+    # dt_string = nowvalue.strftime("%Y-%m-%d_%H_%M_%S")
 
-    send_dicts_to_blob_storage(main_data,blob_service_client,container_name,blob_name)
-    send_dicts_to_blob_storage(main_data,blob_service_client,'historial-compliance-standard-reports',blob_name2)
+    # blob_name="currentanalysis-"+cloud+".csv"
+    # blob_name2=cloud+" Analysis "+dt_string+".csv"
 
-    del main_data
+    #blob_service_client = BlobServiceClient.from_connection_string(connection_string)
 
-    gc.collect()
+    #send_dicts_to_blob_storage(main_data,blob_service_client,container_name,blob_name)
+    #send_dicts_to_blob_storage(main_data,blob_service_client,'historial-compliance-standard-reports',blob_name2)
+
+    # del main_data
+
+    # gc.collect()
+            
+    with open('output.csv', 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=main_data[0].keys())
+        writer.writeheader()
+        writer.writerows(main_data)
+
+    print("done!!!")
 
 def handler():
 
@@ -301,9 +339,9 @@ def handler():
     aws_analysis=[['Estandar Sura AWS PDN V 0.6','AWS PDN Account Group','Produccion'],
                     ['Estandar Sura AWS DLLO V 0.6','AWS DLLO Account Group','Desarrollo'],
                     ['Estandar Sura AWS LAB V 0.6','AWS LAB Account Group','Laboratorio']]
-    oci_analysis=[['Estandar Sura OCI PDN V 0.5','OCI PDN Account Group','Produccion'],
-                    ['Estandar Sura OCI DLLO V 0.5','OCI DLLO Account Group','Desarrollo'],
-                    ['Estandar Sura OCI LAB V 0.5','OCI LAB Account Group','Laboratorio']]
+    oci_analysis=[['Estandar Sura OCI PDN V 0.6','OCI PDN Account Group','Produccion'],
+                    ['Estandar Sura OCI DLLO V 0.6','OCI DLLO Account Group','Desarrollo'],
+                    ['Estandar Sura OCI LAB V 0.6','OCI LAB Account Group','Laboratorio']]
 
     report_maker(azure_analysis,'azure',allComplianceStandards)
     report_maker(aws_analysis,'aws',allComplianceStandards)
