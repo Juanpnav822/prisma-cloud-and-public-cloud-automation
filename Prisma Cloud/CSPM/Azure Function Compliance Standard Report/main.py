@@ -237,7 +237,7 @@ def data_maker(main_data,account_group,compliance_name,requirement_name,section,
         logging.info('No resources found for {} {}'.format(section['sectionId'],compliance_name))
         print('No resources found for {} {}'.format(section['sectionId'],compliance_name))
 
-@app.schedule(schedule="0 0 */2 * * *", arg_name="mytimer", run_on_startup=True,
+@app.schedule(schedule="0 0 */12 * * *", arg_name="mytimer", run_on_startup=False,
               use_monitor=False) 
 def azure_reports(mytimer: func.TimerRequest) -> None:
     utc_timestamp = datetime.datetime.now(datetime.UTC).replace(
@@ -309,7 +309,7 @@ def azure_reports(mytimer: func.TimerRequest) -> None:
 
         counter=counter+1
 
-@app.schedule(schedule="0 20 */2 * * *", arg_name="mytimer", run_on_startup=False,
+@app.schedule(schedule="0 30 */12 * * *", arg_name="mytimer", run_on_startup=False,
               use_monitor=False) 
 def aws_reports(mytimer: func.TimerRequest) -> None:
     utc_timestamp = datetime.datetime.now(datetime.UTC).replace(
@@ -381,7 +381,7 @@ def aws_reports(mytimer: func.TimerRequest) -> None:
 
         counter=counter+1
 
-@app.schedule(schedule="0 40 */2 * * *", arg_name="mytimer", run_on_startup=True,
+@app.schedule(schedule="0 50 */12 * * *", arg_name="mytimer", run_on_startup=True,
               use_monitor=False) 
 def oci_reports(mytimer: func.TimerRequest) -> None:
     utc_timestamp = datetime.datetime.now(datetime.UTC).replace(
